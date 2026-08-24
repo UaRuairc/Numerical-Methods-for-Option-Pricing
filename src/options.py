@@ -1,4 +1,3 @@
-import datetime as dt
 import matplotlib.pyplot as plt
 import numpy as np
 from numpy import random
@@ -8,48 +7,6 @@ from scipy.sparse import diags
 from scipy.sparse.linalg import splu
 from scipy.linalg.lapack import dgttrf, dgttrs
 from numba import njit
-
-
-def plot_option_surface_2D(
-        V,
-        domain,
-        labels,
-        axis_to_fix,
-        idx_to_take,
-        ):
-
-    fig = plt.figure()
-    ax = fig.add_subplot(projection='3d')
-
-    V_2d = np.take(V, idx_to_take, axis=axis_to_fix)
-
-    fixed = domain[axis_to_fix][idx_to_take]
-    fixed_label = labels[axis_to_fix]
-
-    coords = [d for i, d in enumerate(domain) if i != axis_to_fix]
-    labels = [l for i, l in enumerate(labels) if i != axis_to_fix]
-    X, Y = np.meshgrid(coords[0], coords[1], indexing='ij')
-    surf = ax.plot_surface(X, Y, V_2d, cmap='viridis')
-
-    ax.set_xlabel(labels[0])
-    ax.set_ylabel(labels[1])
-    ax.set_zlabel("Option Price")
-    ax.set_title(f"{fixed_label} = {fixed:.4f}")
-    ax.view_init(elev=35, azim=135)
-    plt.show()
-
-def plot_option_surface(strikes, S, V_S0):
-
-    fig = plt.figure()
-    ax = fig.add_subplot(projection='3d')
-    X, Y = np.meshgrid(S, strikes, indexing='ij')
-    surf = ax.plot_surface(X, Y, V_S0, cmap='viridis')
-    ax.set_xlabel('Strike')
-    ax.set_ylabel('Spot Price')
-    ax.set_zlabel('Option Price')
-    ax.view_init(elev=25, azim=-120)
-    # fig.colorbar(surf, shrink=0.6, aspect=12, label='Price')
-    plt.show()
 
 def BS_closed_form(S0, K, r, T, sigma):
     """
@@ -146,23 +103,66 @@ def strong_error(fn, S0, r, T, sigma, n, steps, seed):
     S_exact = gbm_exact_integration_reconstruct(S0, r, T, sigma, n=n, steps=steps, seed=seed)
     return np.abs(S_T - S_exact).mean()
 
+def build_grid(
+        K,
+        S0,
+        r,
+        T,
+        sigma,
+        s_steps,
+        t_steps,
+        n_std,
+):
+
+
+    vol = sigma * np.sqrt(T)
+    logK, logS0 = np.log(K), np.log(S0)
+
+    # initialise upper and lower bounds to guard against a low probability gbm path
+    low = n_std * vol + (r - 0.5 * sigma ** 2) * T
+    high = n_std * vol - (r + 0.5 * sigma ** 2) * T
+
+    # make sure S0 and K are inside the grid.
+    # guard against large maturity T (or large sigma/r)
+    low = max(0.7 * n_std * vol, low)
+    high = max(0.7 * n_std * vol, high)
+
+    dx = (low+high)/s_steps
+
+    # make log(S) grid include K
+
+    n_low = int(np.ceil(low/dx))
+    n_high = s_steps - n_low
+    x = logK + dx * np.arange(-n_low, n_high+1)
+
+    n_t = t_steps + 1
+    tau, dt = np.linspace(0, T, n_t, retstep=True)
+
+    return x, dx, tau, dt
+
+
 
 def pde_crank_nicolson(
-        strikes : float | np.ndarray,
+        K,
         S0,
         r,
         T,
         sigma,
         s_steps=100,
         t_steps=100,
-        return_full_V = False,
+        return_full_V=False
 ):
     """
     the crank nicolson method to solve the Black Scholes PDE for a range of strikes, and a plot of the option surface
-    we allow for multiple strikes
+    for multiple strikes. This is not an efficient
     """
 
     """
+    
+    !!!!!!!!!!
+    # NOTE: IN THIS DERIVATION USES V[x,t] BUT IN THE CODE WE WILL USE V[t,x]
+    !!!!!!!!!!
+    
     In linear space, the PDE is:
              dv/dt + 1/2 sigma^2 S^2 d^2v/dS^2 + rS dv/dS - rv = 0      
     we set tau = T - t, thus
@@ -182,50 +182,42 @@ def pde_crank_nicolson(
     Deep ITM options V = S - K exp(-rt)  => for all time steps tau_n, V[i=-1,j] = S_max - K exp(-rt)
 
     """
-    if isinstance(strikes, float | int) : strikes = np.atleast_1d(strikes).astype(float)
+
+
+    # Grid
+    x, dx, tau, dt = build_grid(K, S0, r, T, sigma, s_steps, t_steps, n_std=5)
+    S = np.exp(x)
+
+    # ------------------------------------------------------------------
+    # recall: typically one writes v(x_i,t_n) = v[i, n] but for speed in numpy it's better to have v(t_n,x_i) since we move forward in t
+    # ------------------------------------------------------------------
+
 
     n_x = s_steps + 1
     n_t = t_steps + 1
-    n_k = len(strikes)
-    strikes = np.sort(strikes)
 
-    low = min(S0, strikes.min())
-    high = max(S0, strikes.max())
-    x_min = np.log(low) - 5 * sigma * np.sqrt(T)
-    x_max = np.log(high) + 5 * sigma * np.sqrt(T)
-    x, dx = np.linspace(x_min, x_max, n_x, retstep=True)
-    tau, dt = np.linspace(0, T, n_t, retstep=True)
-    S = np.exp(x)
-    D = np.exp(-r * tau.reshape(-1, 1))
-
-    """
-    Define V
-    #### Important:
-    #### typically one writes v(x_i,t_n) = v[i, n]. But in numpy, it's better to have v(t_n,x_i) since we move forward in t
-    """
-
-    V = np.zeros((n_t, n_x, n_k))
+    V = np.zeros((n_t, n_x))
 
     """
     Define:
     n = 1, 2, ..., t_steps + 1             [ index for tau        ]
     i = 1, 2, ..., S_steps + 1             [ index for step count ]
     Crank Nicolson method in log space:
-    
+
     The various terms in their differenced forms (implicit - explicit for x coordinate, implicit in time):
-    
+
     dv/dtau   = v[i, n+1] - v[i, n] / dtau                                                                                
     d^2v/dx^2 = [ (1/2)(v[i+1, n] - 2v[i, n]+ v[i-1, n])   + (1/2)(v[i+1, n+1] - 2v[i, n+1]+ v[i-1, n+1]) ] / dx^2   
-    dv/dx  =    [ (1/2)(v[i+1, n]- v[i-1,n])               + (1/2)(v[i+1, n+1]- v[i-1, n+1])              ] / 2dx  
-    v =         [ (1/2)(v[i, n])                           + (1/2)(v[i, n+1])                             ]
+    dv/dx     = [ (1/2)(v[i+1, n]- v[i-1,n])               + (1/2)(v[i+1, n+1]- v[i-1, n+1])              ] / 2dx  
+    v         = [ (1/2)(v[i, n])                           + (1/2)(v[i, n+1])                             ]
 
     Substituting above into (Eq.1) we get:
-    
+
     v[i, n+1] - v[i, n] / dtau =                                                                                          (Eq.2)
     + (1/2 sigma^2)   [ (1/2)(v[i+1, n] - 2v[i, n]+ v[i-1, n])   + (1/2)(v[i+1, n+1] - 2v[i, n+1]+ v[i-1, n+1]) ] / dx^2      
     + (r-1/2 sigma^2) [ (1/2)(v[i+1, n]- v[i-1,n])               + (1/2)(v[i+1, n+1]- v[i-1, n+1])              ] / 2dx  
     - r               [ (1/2)(v[i, n])                           + (1/2)(v[i, n+1])                             ]
-    
+
     define a = dtau * (1/2 sigma^2)   / dx^2  = sigma^2         * (dtau/2dx^2)
            b = dtau * (r-1/2 sigma^2) / 2 dx  = (r-1/2 sigma^2) * (dtau/2dx)
            c = dtau * (-r)
@@ -233,172 +225,57 @@ def pde_crank_nicolson(
 
     a = dt * (0.5 * sigma ** 2) / dx ** 2
     b = dt * (r - 0.5 * sigma ** 2) / (2 * dx)
-    c = dt * (-r)
+    c = -r * dt
 
     """
     multiply (Eq.2) by dtau, then collect all t = n+1 terms on the LHS, and t = n terms on the RHS. And substitute in a, b, c.
     LHS = 2 v[i, n+1]   - a [ v[i+1, n+1] - 2v[i, n+1] + v[i-1, n+1] ]
                         - b [ v[i+1, n+1] - v[i-1, n+1]              ]
                         - c [ v[i, n+1]                              ]
-
+    
     RHS = 2 v[i, n]     + a [ v[i+1, n] - 2v[i, n]+ v[i-1, n]        ]
                         + b [ v[i+1, n] - v[i-1, n]                  ]
                         + c [ v[i, n]                                ]
     Collecting terms at the same spatial coord,
     LHS = - (a+b) * v[i+1, n+1]    + (2 + (2a - c)) * v[i, n+1]    - (a-b) * v[i-1, n+1]
     RHS = + (a+b) * v[i+1, n]      + (2 - (2a - c)) * v[i, n]      + (a-b) * v[i-1, n]
+    
     redefine A = - (a-b)
-             B = 2a - c
-             C = - (a+b)
+            B = 2a - c
+            C = - (a+b)
     (note in this derivation my coefficients absorbed an additional factor of 2)
     """
-
     A = -(a - b)
     B = 2 * a - c
     C = -(a + b)
 
     """
-    LHS =   A * v[i-1, n+1]    + (2 + B) * v[i, n+1]    + C * v[i+1, n+1] 
-    RHS = - A * v[i-1, n]      + (2 - B) * v[i, n]      - C * v[i+1, n]      
+        LHS =   A * v[i-1, n+1]    + (2 + B) * v[i, n+1]    + C * v[i+1, n+1] 
+        RHS = - A * v[i-1, n]      + (2 - B) * v[i, n]      - C * v[i+1, n]      
 
-    Remove the boundaries from v, and set the boundary conditions:
-    
-    At maturity V = S-K                  => for all i, V[i,j=0]  = max(S-K, 0)
-    Deep OTM options V = 0               => for all j, V[i=0,j]  = 0
-    Deep ITM options V = S - K exp(-rt)  => for all j, V[i=-1,j] = S_max - K exp(-rt)
+        Remove the boundaries from v, and set the boundary conditions:
+
+        At maturity V = S-K                  => for all i, V[i,j=0]  = max(S-K, 0)
+        Deep OTM options V = 0               => for all j, V[i=0,j]  = 0
+        Deep ITM options V = S - K exp(-rt)  => for all j, V[i=-1,j] = S_max - K exp(-rt)
     """
+    #### maturity boundary
+    V[0, :] = np.maximum(S - K, 0)
+    #### Low-S boundary:
+    V[:, 0] = 0.0
+    #### High-S boundary:
+    V[:, -1] = S[-1] - K * np.exp(-r * tau)
 
-    V_interior =  V[:, 1:-1, :]
-
-    upper_S_boundary = S[-1] - D * strikes[None, :]
-    lower_S_boundary = np.zeros((n_t, n_k))
-    maturity_boundary = np.maximum(S[:, None] - strikes[None, :], 0)
-    V[:,  0,  :] = lower_S_boundary
-    V[:, -1,  :] = upper_S_boundary
-    V[0,  :,  :] = maturity_boundary
-
+    V_interior = V[:, 1:-1]
     """
     At each step, we will have
-    
+
     L v[1:-1, n+1] = R v[1:-1, n] + boundary conditions
-    
+
     But since the same L, R and LU factorisation is used at each step for all strikes in log space, we pre-emptively declare it now outside the loop:
     L = tri_diag[ A        (2+B)        C]
     R = tri_diag[-A        (2-B)       -C]
     """
-    L = diags([A, (2 + B), C], shape=(n_x-2, n_x-2), offsets=[-1, 0, 1]).tocsc()
-    R = diags([-A, (2 - B), -C], shape=(n_x-2, n_x-2), offsets=[-1, 0, 1]).tocsc()
-    LU = splu(L)
-    """
-    Want to plot the entire mesh later. But can drop old t-step terms for benchmarking
-    """
-
-
-    for n in range(n_t - 1):
-        rhs = R @ V_interior[n, :, :]
-        # add boundaries back
-        rhs[0, :] -= A * (V[n, 0, :] + V[n + 1, 0, :])
-        rhs[-1, :] -= C * (V[n, -1,  :] + V[n + 1, -1,  :])
-        # solve for time step n+1
-        V_interior[n + 1, :, :] = LU.solve(rhs)
-
-    """
-    maturity = np.linspace(0, T, n_t)
-    plot_option_surface_2D(
-        V,
-        (S, maturity, strikes),
-        ("spot", "maturity", "strike"),
-        0,
-        250,
-    )
-    """
-
-    # only one strike
-    if len(strikes) == 1: return (V[:,:,0], {'S': S, 'tau': tau}) if return_full_V else (V[-1,:,0], {'S': S})
-
-    # multiple strikes
-    if not return_full_V: return V[-1, :, :], {'S': S, 'K': strikes}
-    return V, {'S': S, 'tau': tau, 'K': strikes}
-
-
-def pde_crank_nicolson_v2(
-        K,
-        S0,
-        r,
-        T,
-        sigma,
-        s_steps=100,
-        t_steps=100,
-        return_full_V=False
-):
-    """
-    Crank-Nicolson solver for the Black-Scholes PDE
-
-    v2 indicates this method is identical to v1, except it only works for ONE strike.
-
-    Unlike the multi-strike version:
-        V.shape = (n_t, n_x)
-    rather than:
-        V.shape = (n_t, n_x, n_k)
-    """
-
-    n_x = s_steps + 1
-    n_t = t_steps + 1
-
-    # ------------------------------------------------------------------
-    # Grid
-    # ------------------------------------------------------------------
-    low = min(S0, K)
-    high = max(S0, K)
-
-    x_min = np.log(low) - 5 * sigma * np.sqrt(T)
-    x_max = np.log(high) + 5 * sigma * np.sqrt(T)
-
-    x, dx = np.linspace(x_min, x_max, n_x, retstep=True)
-    tau, dt = np.linspace(0, T, n_t, retstep=True)
-
-    S = np.exp(x)
-
-    # ------------------------------------------------------------------
-    # Option value grid
-    #
-    # V[n, i] = V(tau_n, x_i)
-    # ------------------------------------------------------------------
-    V = np.zeros((n_t, n_x))
-
-    # ------------------------------------------------------------------
-    # Crank-Nicolson coefficients
-    # ------------------------------------------------------------------
-    a = dt * (0.5 * sigma ** 2) / dx ** 2
-    b = dt * (r - 0.5 * sigma ** 2) / (2 * dx)
-    c = -r * dt
-
-    A = -(a - b)
-    B = 2 * a - c
-    C = -(a + b)
-
-    # ------------------------------------------------------------------
-    # Boundary / initial conditions
-    # ------------------------------------------------------------------
-
-    # tau = 0 corresponds to maturity:
-    # V(S, 0) = max(S - K, 0)
-    V[0, :] = np.maximum(S - K, 0)
-
-    # Low-S boundary:
-    # V -> 0 as S -> 0
-    V[:, 0] = 0.0
-
-    # High-S boundary:
-    # V ~ S - K exp(-r tau)
-    V[:, -1] = S[-1] - K * np.exp(-r * tau)
-
-    # Interior view -- modifications here modify V directly
-    V_interior = V[:, 1:-1]
-
-    # ------------------------------------------------------------------
-    # Crank-Nicolson matrices
-    # ------------------------------------------------------------------
     L = diags(
         [A, 2 + B, C],
         offsets=[-1, 0, 1],
@@ -413,37 +290,25 @@ def pde_crank_nicolson_v2(
 
     # Same L every timestep, so factorise once
     LU = splu(L)
-
-    # ------------------------------------------------------------------
-    # Time stepping
-    # ------------------------------------------------------------------
     for n in range(n_t - 1):
-
-        # Now a 1D matrix-vector multiply rather than matrix-matrix
         rhs = R @ V_interior[n]
-
         # Add boundary contributions
         rhs[0] -= A * (V[n, 0] + V[n + 1, 0])
         rhs[-1] -= C * (V[n, -1] + V[n + 1, -1])
-
         # 1D solve
         V_interior[n + 1] = LU.solve(rhs)
 
-    grid = {
-        "S": S,
-        "tau": tau,
-    }
-
     return (V, {'S': S, 'tau': tau}) if return_full_V else V[-1, :], {'S': S}
 
-def pde_crank_nicolson_v3(
+def pde_crank_nicolson_v2(
         K,
         S0,
         r,
         T,
         sigma,
         s_steps=100,
-        t_steps=100
+        t_steps=100,
+        n_std=5,
 ):
     """
     Crank-Nicolson solver for the Black-Scholes PDE for ONE strike.
@@ -460,18 +325,8 @@ def pde_crank_nicolson_v3(
     n_x = s_steps + 1
     n_t = t_steps + 1
 
-    # ------------------------------------------------------------------
     # Grid
-    # ------------------------------------------------------------------
-    low = min(S0, K)
-    high = max(S0, K)
-
-    x_min = np.log(low) - 5 * sigma * np.sqrt(T)
-    x_max = np.log(high) + 5 * sigma * np.sqrt(T)
-
-    x, dx = np.linspace(x_min, x_max, n_x, retstep=True)
-    tau, dt = np.linspace(0, T, n_t, retstep=True)
-
+    x, dx, tau, dt = build_grid(K, S0, r, T, sigma, s_steps, t_steps, n_std=5)
     S = np.exp(x)
 
     # ------------------------------------------------------------------
@@ -550,7 +405,7 @@ def pde_crank_nicolson_v3(
 
     return V_, grid
 
-def pde_crank_nicolson_v4(
+def pde_crank_nicolson_v3(
         K,
         S0,
         r,
@@ -574,12 +429,7 @@ def pde_crank_nicolson_v4(
 
     n_x = s_steps + 1
     n_t = t_steps + 1
-    low = min(S0, K)
-    high = max(S0, K)
-    x_min = np.log(low) - 5 * sigma * np.sqrt(T)
-    x_max = np.log(high) + 5 * sigma * np.sqrt(T)
-    x, dx = np.linspace(x_min, x_max, n_x, retstep=True)
-    tau, dt = np.linspace(0, T, n_t, retstep=True)
+    x, dx, tau, dt = build_grid(S0, K, r, T, sigma, s_steps, t_steps, n_std=5)
     S = np.exp(x)
 
 
@@ -664,13 +514,12 @@ class EuropeanOption:
         call = self.discount(payoffs.mean(), r)
         return self.price(call, S0, r)
 
-    def price_CN(self, S0, r, sigma, s_steps=100, t_steps=500, version : Literal["v1", "v2", "v3", "v4"] = "v1"):
+    def price_CN(self, S0, r, sigma, s_steps=100, t_steps=500, version : Literal["v1", "v2", "v3"] = "v1"):
 
         solvers = {
             "v1": pde_crank_nicolson,
             "v2": pde_crank_nicolson_v2,
             "v3": pde_crank_nicolson_v3,
-            "v4": pde_crank_nicolson_v4,
         }
 
         solver = solvers[version]
