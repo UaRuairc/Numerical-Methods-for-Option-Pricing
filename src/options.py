@@ -1,12 +1,10 @@
-import matplotlib.pyplot as plt
 import numpy as np
-from numpy import random
 import scipy.stats
 from typing import Literal
 from scipy.sparse import diags
 from scipy.sparse.linalg import splu
 from scipy.linalg.lapack import dgttrf, dgttrs
-from numba import njit
+# from numba import njit
 
 def BS_closed_form(S0, K, r, T, sigma):
     """
@@ -31,8 +29,8 @@ def gbm_exact_integration(
     """
     solves for S by integrating the sde
     """
-    np.random.seed(seed)
-    W = np.sqrt(T) * random.normal(0, 1, size=n)
+    rng = np.random.default_rng(seed)
+    W = np.sqrt(T) * rng.normal(0, 1, size=n)
     S = S0 * np.exp((r - 0.5 * sigma ** 2) * T + sigma * W)
     return S
 
@@ -48,9 +46,9 @@ def gbm_exact_integration_reconstruct(
     """
     In order to test strong order error, must reconstruct W from the same dW used to estimate pathwise methods
     """
-    np.random.seed(seed)
+    rng = np.random.default_rng(seed)
     dt = T / steps
-    dW = np.sqrt(dt) * random.normal(0, 1, size=(n, steps))
+    dW = np.sqrt(dt) * rng.normal(0, 1, size=(n, steps))
     W = dW.sum(axis=1)
     S = S0 * np.exp((r - 0.5 * sigma ** 2) * T + sigma * W)
 
@@ -68,9 +66,9 @@ def gbm_paths_euler(
     """
     solves for S by discretising the sde
     """
-    np.random.seed(seed)
+    rng = np.random.default_rng(seed)
     dt = T / steps
-    dW = np.sqrt(dt) * random.normal(0, 1, size=(n, steps))
+    dW = np.sqrt(dt) * rng.normal(0, 1, size=(n, steps))
     S = np.zeros((n, steps + 1))
     S[:, 0] = S0
     for t in range(steps):
@@ -89,9 +87,9 @@ def gbm_paths_milstein(
     """
     solves for S by discretising the sde
     """
-    np.random.seed(seed)
+    rng = np.random.default_rng(seed)
     dt = T / steps
-    dW = np.sqrt(dt) * random.normal(0, 1, size=(n, steps))
+    dW = np.sqrt(dt) * rng.normal(0, 1, size=(n, steps))
     S = np.zeros((n, steps + 1))
     S[:, 0] = S0
     for t in range(steps):
