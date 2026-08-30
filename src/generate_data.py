@@ -126,7 +126,7 @@ def generate_cn_data(
         save=True,
         filename: str = "default",
         save_dir: str = "default",
-        versions: list = ('v1', 'v2', 'v3', 'v4')
+        versions: tuple = ('v1', 'v2', 'v3', 'v4')
 ):
     """
     generate data using FDM and MC methods from ./options.

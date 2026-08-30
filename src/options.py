@@ -361,32 +361,6 @@ def pde_crank_nicolson(
     for multiple strikes. This is not an efficient
     """
 
-    """
-    
-    !!!!!!!!!!
-    # NOTE: IN THIS DERIVATION USES V[x,t] BUT IN THE CODE WE WILL USE V[t,x]
-    !!!!!!!!!!
-    
-    In linear space, the PDE is:
-             dv/dt + 1/2 sigma^2 S^2 d^2v/dS^2 + rS dv/dS - rv = 0      
-    we set tau = T - t, thus
-             dv/dtau = 1/2 sigma^2 S^2 d^2v/dS^2 + rS dv/dS - rv
-
-    In log space, x = ln(S), the PDE is:                                    
-             dv/dtau = 1/2 sigma^2 d^2v/dx^2 + (r-1/2 sigma^2)dv/dx - rv        (Eq.1)
-    
-    
-    1. We denote V[i, n] = V[x_i, tau_n]. In the code we will also have a third index, k: V[i, n, k] where k is the index for the strike.
-    
-    2. We denote spatial steps by dx, and temporal steps by dt = dtau
-    
-    Boundary conditions
-    At maturity V = S-K                  => for all grid points at maturity, V[i,n=0]  = max(S-K, 0)
-    Deep OTM options V = 0               => for all time steps tau_n, V[i=0,n]  = 0
-    Deep ITM options V = S - K exp(-rt)  => for all time steps tau_n, V[i=-1,j] = S_max - K exp(-rt)
-
-    """
-
 
     # Grid
     x, dx, tau, dt, _ = build_grid(K=K,S0=S0, r=r, T=T, sigma=sigma, s_steps=s_steps, t_steps=t_steps, n_std=5)
@@ -645,7 +619,7 @@ class EuropeanOption:
         self.type = type
 
     def payoff(self, S):
-        return np.maximum(S - self.K, 0) if self.type == "call" else np.maximum(S - self.K, 0)
+        return np.maximum(S - self.K, 0)
 
     def discount(self, x, r):
         return x * np.exp(- r * self.T)
@@ -686,7 +660,7 @@ class EuropeanOption:
         call = self.discount(payoffs.mean(), r)
         return self.price(call, S0, r)
 
-    def price_CN(self, S0, r, sigma, s_steps=100, t_steps=500, version : Literal["v1", "v2", "v3"] = "v1"):
+    def price_CN(self, S0, r, sigma, s_steps=100, t_steps=500, version : str="v1"):
 
         solvers = {
             "v1": pde_crank_nicolson,
