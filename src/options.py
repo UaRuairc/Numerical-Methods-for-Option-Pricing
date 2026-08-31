@@ -656,7 +656,7 @@ def cn_loop(
             np.subtract(work, V, out=V)
 
 @njit
-def cn_loop_compile_all(
+def _cn_loop(
     V,
     work,
     l,
@@ -821,7 +821,7 @@ def pde_crank_nicolson_v6(
     # V[n+1] = (4 L^-1 - 1) (V[n] + boundary_conditions)
 
 
-    cn_loop_compile_all(V_, work, l, d, u, bc_up, bc_up_euler_implicit, n_t, n_rannacher)
+    _cn_loop(V_, work, l, d, u, bc_up, bc_up_euler_implicit, n_t, n_rannacher)
 
     grid = {
         "S": S[1:-1],
