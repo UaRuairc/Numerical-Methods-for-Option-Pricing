@@ -344,7 +344,20 @@ def build_grid(
 
     return x, dx, tau, dt, n_low
 
+def matrix_coefficients(dx, dt, r, sigma):
 
+
+    a = dt * (0.5 * sigma ** 2) / dx ** 2
+    b = dt * (r - 0.5 * sigma ** 2) / (2 * dx)
+    c = -r * dt
+
+    A = -(a - b)
+    B = 2 * a - c
+    C = -(a + b)
+
+    matrix_coefficients = (A, B, C)
+
+    return matrix_coefficients
 
 def pde_crank_nicolson(
         K,
@@ -361,43 +374,30 @@ def pde_crank_nicolson(
     for multiple strikes. This is not an efficient
     """
 
+    x, dx, tau, dt, _ = build_grid(K=K, S0=S0, r=r, T=T, sigma=sigma, s_steps=s_steps, t_steps=t_steps, n_std=5)
+    A, B, C = matrix_coefficients(dx, dt, r, sigma)
+    n_x, n_t = s_steps + 1, t_steps + 1
 
-    # Grid
-    x, dx, tau, dt, _ = build_grid(K=K,S0=S0, r=r, T=T, sigma=sigma, s_steps=s_steps, t_steps=t_steps, n_std=5)
     S = np.exp(x)
+
 
     # ------------------------------------------------------------------
     # recall: typically one writes v(x_i,t_n) = v[i, n] but for speed in numpy it's better to have v(t_n,x_i) since we move forward in t
     # ------------------------------------------------------------------
-
-    n_x = s_steps + 1
-    n_t = t_steps + 1
     V = np.zeros((n_t, n_x))
-
-
-    a = dt * (0.5 * sigma ** 2) / dx ** 2
-    b = dt * (r - 0.5 * sigma ** 2) / (2 * dx)
-    c = -r * dt
-
-    A = -(a - b)
-    B = 2 * a - c
-    C = -(a + b)
-
     #### maturity boundary
     V[0, :] = np.maximum(S - K, 0)
-    #### Low-S boundary:
-    V[:, 0] = 0.0
     #### High-S boundary:
     V[:, -1] = S[-1] - K * np.exp(-r * tau)
 
     L = diags(
-        [A, 2 + B, C],
+        diagonals=[A, 2 + B, C],
         offsets=[-1, 0, 1],
         shape=(n_x - 2, n_x - 2)
     ).tocsc()
 
     R = diags(
-        [-A, 2 - B, -C],
+        diagonals=[-A, 2 - B, -C],
         offsets=[-1, 0, 1],
         shape=(n_x - 2, n_x - 2)
     ).tocsc()
@@ -429,25 +429,17 @@ def pde_crank_nicolson_v2(
     """
     v2 indicates it is identical to v1, except now only allow one strike, and we only store a single column vector v_n, and discard previous timesteps.
     """
-    # Grid
-    x, dx, tau, dt, _ = build_grid(K=K,S0=S0, r=r, T=T, sigma=sigma, s_steps=s_steps, t_steps=t_steps, n_std=5)
+    x, dx, tau, dt, _ = build_grid(K=K, S0=S0, r=r, T=T, sigma=sigma, s_steps=s_steps, t_steps=t_steps, n_std=5)
+    A, B, C = matrix_coefficients(dx, dt, r, sigma)
+    n_x, n_t = s_steps + 1, t_steps + 1
+
     S = np.exp(x)
-    n_x = s_steps + 1
-    n_t = t_steps + 1
-    a = dt * (0.5 * sigma ** 2) / dx ** 2
-    b = dt * (r - 0.5 * sigma ** 2) / (2 * dx)
-    c = -r * dt
-    A = -(a - b)
-    B = 2 * a - c
-    C = -(a + b)
 
 
     # tau = 0 corresponds to maturity
     maturity_boundary = np.maximum(S - K, 0)
-    # Low-S boundary trivial, 0
     # High-S boundary
     s_boundary_upper = S[-1] - K * np.exp(-r * tau)
-
 
     # L and R matrices
     L = diags(
@@ -500,26 +492,17 @@ def pde_crank_nicolson_v3(
     from scipy.linalg.lapack import dgttrf, dgttrs
     """
 
-    x, dx, tau, dt, _ = build_grid(K=K,S0=S0, r=r, T=T, sigma=sigma, s_steps=s_steps, t_steps=t_steps, n_std=5)
+    x, dx, tau, dt, _ = build_grid(K=K, S0=S0, r=r, T=T, sigma=sigma, s_steps=s_steps, t_steps=t_steps, n_std=5)
+    A, B, C = matrix_coefficients(dx, dt, r, sigma)
+    n_x, n_t = s_steps + 1, t_steps + 1
+
     S = np.exp(x)
-
-
-    n_x = s_steps + 1
-    n_t = t_steps + 1
-    a = dt * (0.5 * sigma ** 2) / dx ** 2
-    b = dt * (r - 0.5 * sigma ** 2) / (2 * dx)
-    c = -r * dt
-    A = -(a - b)
-    B = 2 * a - c
-    C = -(a + b)
-
-
 
     maturity_boundary = np.maximum(S - K, 0)
     s_boundary_upper = S[-1] - K * np.exp(-r * tau)
     bc_up = C * (s_boundary_upper[:-1] + s_boundary_upper[1:])
 
-
+    # tridiagonal factorisation
     dl, d, du, du2, ipiv, _ = dgttrf(np.full(n_x-3, A), np.full(n_x-2, 2 + B), np.full(n_x-3, C))
     dR = 2.0 - B
     V_ = maturity_boundary[1:-1]
@@ -528,6 +511,7 @@ def pde_crank_nicolson_v3(
         rhs[1:] -= A * V_[:-1]
         rhs[:-1] -= C * V_[1:]
         rhs[-1] -= bc_up[n]
+        # tridiagonal solve
         V_, _ = dgttrs(dl, d, du, du2, ipiv, rhs, overwrite_b=1)
 
     grid = {
@@ -549,19 +533,11 @@ def pde_crank_nicolson_v4(
     v4 indicates this method has all the optimisations of v3, but in addition, we optimise the cn loop further and add introduce rannacher smoother
     """
 
-    n_x = s_steps + 1
-    n_t = t_steps + 1
-    x, dx, tau, dt, _ = build_grid(K=K,S0=S0, r=r, T=T, sigma=sigma, s_steps=s_steps, t_steps=t_steps, n_std=5)
+    x, dx, tau, dt, _ = build_grid(K=K, S0=S0, r=r, T=T, sigma=sigma, s_steps=s_steps, t_steps=t_steps, n_std=5)
+    A, B, C = matrix_coefficients(dx, dt, r, sigma)
+    n_x, n_t = s_steps + 1, t_steps + 1
+
     S = np.exp(x)
-
-
-    a = dt * (0.5 * sigma ** 2) / dx ** 2
-    b = dt * (r - 0.5 * sigma ** 2) / (2 * dx)
-    c = -r * dt
-    A = -(a - b)
-    B = 2 * a - c
-    C = -(a + b)
-
 
 
     maturity_boundary = np.maximum(S - K, 0)
