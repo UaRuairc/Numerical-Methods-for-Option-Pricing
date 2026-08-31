@@ -615,6 +615,220 @@ def tridiag_solve_inplace(l, d, u, x):
     for i in range(n - 2, -1, -1):
         x[i] = (x[i] - u[i] * x[i + 1]) / d[i]
 
+def cn_loop(
+    V,
+    work,
+    l,
+    d,
+    u,
+    bc_up,
+    bc_up_euler_implicit,
+    n_t,
+    n_rannacher,
+):
+    for n in range(n_t - 1):
+
+        if n < n_rannacher:
+
+            # Rannacher step 1
+            np.multiply(V, 2.0, out=work)
+            work[-1] -= bc_up_euler_implicit[2 * n]
+
+            tridiag_solve_inplace(l, d, u, work)
+
+            np.copyto(V, work)
+
+            # Rannacher step 2
+            np.multiply(V, 2.0, out=work)
+            work[-1] -= bc_up_euler_implicit[2 * n + 1]
+
+            tridiag_solve_inplace(l, d, u, work)
+
+            np.copyto(V, work)
+
+        else:
+            # Crank-Nicolson
+            np.multiply(V, 4.0, out=work)
+            work[-1] -= bc_up[n]
+
+            tridiag_solve_inplace(l, d, u, work)
+
+            np.subtract(work, V, out=V)
+
+@njit
+def cn_loop_compile_all(
+    V,
+    work,
+    l,
+    d,
+    u,
+    bc_up,
+    bc_up_euler_implicit,
+    n_t,
+    n_rannacher,
+):
+    '''for a comparison between the cn loop that only JIT compiles tridiagonal solves'''
+    for n in range(n_t - 1):
+
+        # Rannacher smoothing
+        if n < n_rannacher:
+
+            # First implicit Euler half-step
+            for i in range(V.size):
+                work[i] = 2.0 * V[i]
+
+            work[-1] -= bc_up_euler_implicit[2 * n]
+
+            tridiag_solve_inplace(l, d, u, work)
+
+            for i in range(V.size):
+                V[i] = work[i]
+
+            # Second implicit Euler half-step
+            for i in range(V.size):
+                work[i] = 2.0 * V[i]
+
+            work[-1] -= bc_up_euler_implicit[2 * n + 1]
+
+            tridiag_solve_inplace(l, d, u, work)
+
+            for i in range(V.size):
+                V[i] = work[i]
+
+        else:
+            # Crank-Nicolson
+            for i in range(V.size):
+                work[i] = 4.0 * V[i]
+
+            work[-1] -= bc_up[n]
+
+            tridiag_solve_inplace(l, d, u, work)
+
+            for i in range(V.size):
+                V[i] = work[i] - V[i]
+
+def pde_crank_nicolson_v5(
+        K,
+        S0,
+        r,
+        T,
+        sigma,
+        s_steps=100,
+        t_steps=100
+):
+    """
+    v5 indicates this method has all the optimisations of v4, but we now just njit to compile a custom tridiagonal solver
+    """
+
+    x, dx, tau, dt, _ = build_grid(K=K, S0=S0, r=r, T=T, sigma=sigma, s_steps=s_steps, t_steps=t_steps, n_std=5)
+    A, B, C = matrix_coefficients(dx, dt, r, sigma)
+    n_x, n_t = s_steps + 1, t_steps + 1
+
+    S = np.exp(x)
+
+
+
+    maturity_boundary = np.maximum(S - K, 0)
+    s_boundary_upper = S[-1] - K * np.exp(-r * tau)
+    bc_up = C * (s_boundary_upper[:-1] + s_boundary_upper[1:])
+
+    do_rannacher_step = True
+    n_rannacher = 1
+    bc_up_euler_implicit=None
+
+    if do_rannacher_step:
+        tau_r = np.linspace(0.0, n_rannacher * dt, 2 * n_rannacher + 1)
+        s_boundary_upper_r = S[-1] - K * np.exp(-r * tau_r)
+        bc_up_euler_implicit = C * s_boundary_upper_r[1:]
+
+
+
+    l, d, u = tridiag_factor(np.full(n_x-3, A), np.full(n_x-2, 2 + B), np.full(n_x-3, C))
+
+
+
+    V_ = maturity_boundary[1:-1].copy()
+    work = np.empty_like(V_)
+
+    ######
+    # solve L V[n+1] = R V[n]  Eq. (***)
+
+    # For euler implicit half_step R = 2I and Eq. (***) becomes:
+    # V[n+1] = 2 * L^-1 (V[n] + boundary_conditions)
+
+    # For CN step R = 4I - L and Eq. (***) becomes:
+    # V[n+1] = (4 L^-1 - 1) (V[n] + boundary_conditions)
+
+
+    cn_loop(V_, work, l, d, u, bc_up, bc_up_euler_implicit, n_t, n_rannacher)
+
+    grid = {
+        "S": S[1:-1],
+    }
+
+    return V_, grid
+
+def pde_crank_nicolson_v6(
+        K,
+        S0,
+        r,
+        T,
+        sigma,
+        s_steps=100,
+        t_steps=100
+):
+    """
+    v6 indicates this method has all the optimisations of v5, but we now just njit the entire cn loop
+    """
+
+    x, dx, tau, dt, _ = build_grid(K=K, S0=S0, r=r, T=T, sigma=sigma, s_steps=s_steps, t_steps=t_steps, n_std=5)
+    A, B, C = matrix_coefficients(dx, dt, r, sigma)
+    n_x, n_t = s_steps + 1, t_steps + 1
+
+    S = np.exp(x)
+
+
+
+    maturity_boundary = np.maximum(S - K, 0)
+    s_boundary_upper = S[-1] - K * np.exp(-r * tau)
+    bc_up = C * (s_boundary_upper[:-1] + s_boundary_upper[1:])
+
+    do_rannacher_step = True
+    n_rannacher = 1
+    bc_up_euler_implicit=None
+
+    if do_rannacher_step:
+        tau_r = np.linspace(0.0, n_rannacher * dt, 2 * n_rannacher + 1)
+        s_boundary_upper_r = S[-1] - K * np.exp(-r * tau_r)
+        bc_up_euler_implicit = C * s_boundary_upper_r[1:]
+
+
+
+    l, d, u = tridiag_factor(np.full(n_x-3, A), np.full(n_x-2, 2 + B), np.full(n_x-3, C))
+
+
+
+    V_ = maturity_boundary[1:-1].copy()
+    work = np.empty_like(V_)
+
+    ######
+    # solve L V[n+1] = R V[n]  Eq. (***)
+
+    # For euler implicit half_step R = 2I and Eq. (***) becomes:
+    # V[n+1] = 2 * L^-1 (V[n] + boundary_conditions)
+
+    # For CN step R = 4I - L and Eq. (***) becomes:
+    # V[n+1] = (4 L^-1 - 1) (V[n] + boundary_conditions)
+
+
+    cn_loop_compile_all(V_, work, l, d, u, bc_up, bc_up_euler_implicit, n_t, n_rannacher)
+
+    grid = {
+        "S": S[1:-1],
+    }
+
+    return V_, grid
+
 class EuropeanOption:
     def __init__(self, K: float, T: float, type: Literal["call", "put"]):
         self.K = K
@@ -671,6 +885,8 @@ class EuropeanOption:
             "v2": pde_crank_nicolson_v2,
             "v3": pde_crank_nicolson_v3,
             "v4": pde_crank_nicolson_v4,
+            "v5": pde_crank_nicolson_v5,
+            "v6": pde_crank_nicolson_v6
         }
 
         solver = solvers[version]
