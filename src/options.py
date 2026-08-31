@@ -4,7 +4,8 @@ from typing import Literal
 from scipy.sparse import diags
 from scipy.sparse.linalg import splu
 from scipy.linalg.lapack import dgttrf, dgttrs
-# from numba import njit
+from numba import njit
+
 ## CN DERIVATION
 """
     !!!!!!!!!!
@@ -586,6 +587,33 @@ def pde_crank_nicolson_v4(
     }
 
     return V_, grid
+
+@njit
+def tridiag_factor(lower, diag, upper):
+    l = lower.copy()
+    d = diag.copy()
+    u = upper.copy()
+
+    for i in range(d.size - 1):
+        multiplier = l[i] / d[i]
+        l[i] = multiplier
+        d[i + 1] -= multiplier * u[i]
+
+    return l, d, u
+
+@njit
+def tridiag_solve_inplace(l, d, u, x):
+    n = d.size
+
+    # Forward substitution
+    for i in range(1, n):
+        x[i] -= l[i - 1] * x[i - 1]
+
+    # Back substitution
+    x[n - 1] /= d[n - 1]
+
+    for i in range(n - 2, -1, -1):
+        x[i] = (x[i] - u[i] * x[i + 1]) / d[i]
 
 class EuropeanOption:
     def __init__(self, K: float, T: float, type: Literal["call", "put"]):
