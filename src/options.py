@@ -53,11 +53,6 @@ from numba import njit
     define a = dtau * (1/2 sigma^2)   / dx^2  = sigma^2         * (dtau/2dx^2) (This is the usual lambda Fourier number)
            b = dtau * (r-1/2 sigma^2) / 2 dx  = (r-1/2 sigma^2) * (dtau/2dx)
            c = dtau * (-r)
-    
-
-    a = dt * (0.5 * sigma ** 2) / dx ** 2
-    b = dt * (r - 0.5 * sigma ** 2) / (2 * dx)
-    c = -r * dt
 
     
     multiply (Eq.2) by dtau, then collect all t = n+1 terms on the LHS, and t = n terms on the RHS. And substitute in a, b, c.
@@ -76,29 +71,15 @@ from numba import njit
              B = 2a - c
              C = - (a+b)
     (note in this derivation my coefficients absorbed an additional factor of 2)
+
+    LHS =   A * v[i-1, n+1]    + (2 + B) * v[i, n+1]    + C * v[i+1, n+1] 
+    RHS = - A * v[i-1, n]      + (2 - B) * v[i, n]      - C * v[i+1, n]      
+
+    Remove the boundaries from v, and set the boundary conditions:
     
-    A = -(a - b)
-    B = 2 * a - c
-    C = -(a + b)
-
-    
-        LHS =   A * v[i-1, n+1]    + (2 + B) * v[i, n+1]    + C * v[i+1, n+1] 
-        RHS = - A * v[i-1, n]      + (2 - B) * v[i, n]      - C * v[i+1, n]      
-
-        Remove the boundaries from v, and set the boundary conditions:
-
-        At maturity V = S-K                  => for all i, V[i,j=0]  = max(S-K, 0)
-        Deep OTM options V = 0               => for all j, V[i=0,j]  = 0
-        Deep ITM options V = S - K exp(-rt)  => for all j, V[i=-1,j] = S_max - K exp(-rt)
-    
-    #### maturity boundary
-    V[0, :] = np.maximum(S - K, 0)
-    #### Low-S boundary:
-    V[:, 0] = 0.0
-    #### High-S boundary:
-    V[:, -1] = S[-1] - K * np.exp(-r * tau)
-
-    V_interior = V[:, 1:-1]
+    At maturity V = S-K                  => for all i, V[i,j=0]  = max(S-K, 0)
+    Deep OTM options V = 0               => for all j, V[i=0,j]  = 0
+    Deep ITM options V = S - K exp(-rt)  => for all j, V[i=-1,j] = S_max - K exp(-rt)
     
     At each step, we will have
 
@@ -107,7 +88,6 @@ from numba import njit
     L = tri_diag[ A        (2+B)        C]
     R = tri_diag[-A        (2-B)       -C]
     
-
 """
 
 ## euler implicit derivation
