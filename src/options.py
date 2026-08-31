@@ -371,8 +371,7 @@ def pde_crank_nicolson(
         return_full_V=False
 ):
     """
-    the crank nicolson method to solve the Black Scholes PDE for a range of strikes, and a plot of the option surface
-    for multiple strikes. This is not an efficient
+    the crank nicolson method to solve the Black Scholes PDE
     """
 
     x, dx, tau, dt, _ = build_grid(K=K, S0=S0, r=r, T=T, sigma=sigma, s_steps=s_steps, t_steps=t_steps, n_std=5)
