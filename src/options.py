@@ -880,12 +880,12 @@ class EuropeanOption:
     def price_CN(self, S0, r, sigma, s_steps=100, t_steps=500, version : str="v1"):
 
         solvers = {
-            "v1": pde_crank_nicolson,
-            "v2": pde_crank_nicolson_v2,
-            "v3": pde_crank_nicolson_v3,
-            "v4": pde_crank_nicolson_v4,
-            "v5": pde_crank_nicolson_v5,
-            "v6": pde_crank_nicolson_v6
+            "v1": pde_crank_nicolson,        # initial version made: unoptimised & stores V for all t_steps. Uses scipy's splu(L) for LU factorisation
+            "v2": pde_crank_nicolson_v2,     # modified v1 to only store the most recent t_step. Still uses splu(L).
+            "v3": pde_crank_nicolson_v3,     # modified v2 to use scipy's LAPACK for tridiagonal solve instead of scipy's splu. Also no longer define R.
+            "v4": pde_crank_nicolson_v4,     # modified v3 to update V in-place, and also introduce Rannacher smoothing. Still uses LAPACK.
+            "v5": pde_crank_nicolson_v5,     # modified v4 to use custom tridiagonal solve that can be JIT compiled using numba.
+            "v6": pde_crank_nicolson_v6      # modified v5 to JIT compile the whole cn loop, not just tridiagonal solve.
         }
 
         solver = solvers[version]
