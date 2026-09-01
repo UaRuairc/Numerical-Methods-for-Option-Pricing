@@ -81,11 +81,11 @@ def generate_mc_data(
     save_dir = Path(save_dir)
     if save: save_dir.mkdir(parents=True, exist_ok=True)
 
-    V = EuropeanOption(K, T, type="call")
+    call = EuropeanOption(K, T, type="call")
     known_fns = {
-        'MC_paths_euler': (V.price_MC_paths_euler, True),
-        'MC_paths_milstein': (V.price_MC_paths_milstein, True),
-        'MC_exact_integration': (V.price_MC_exact_integration, False),
+        'MC_paths_euler': (call.price_MC_paths_euler, True),
+        'MC_paths_milstein': (call.price_MC_paths_milstein, True),
+        'MC_exact_integration': (call.price_MC_exact_integration, False),
     }
     known_methods = known_fns.keys()
     unknown = set(methods) - known_methods
@@ -165,14 +165,14 @@ def generate_cn_data(
         raise ValueError(f"Unknown cn methods/versions: {sorted(unknown)}")
 
     print(f"versions chosen: {versions}")
-    V = EuropeanOption(K, T, type="call")
+    call = EuropeanOption(K, T, type="call")
     runs = []
 
     # generate all the runs first then shuffle
     for rep in range(n_reps):
         for s in s_steps:
             for t in t_steps:
-                cn = [(f'CN_{v}', partial(V.price_CN, S0=S0, r=r, sigma=sigma, s_steps=s, t_steps=t, version=v)) for v in versions]
+                cn = [(f'CN_{v}', partial(call.price_CN, S0=S0, r=r, sigma=sigma, s_steps=s, t_steps=t, version=v)) for v in versions]
                 runs.extend(cn)
 
     pyrandom.shuffle(runs)
