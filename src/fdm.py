@@ -513,7 +513,6 @@ def tridiag_solve_inplace(l, d, u, x):
     for i in range(n - 2, -1, -1):
         x[i] = (x[i] - u[i] * x[i + 1]) / d[i]
 
-
 def cn_loop(
     V,
     work,
@@ -606,7 +605,6 @@ def _cn_loop(
 
             for i in range(V.size):
                 V[i] = work[i] - V[i]
-
 
 def pde_crank_nicolson_v5(
         K,
@@ -732,5 +730,127 @@ def pde_crank_nicolson_v6(
     grid = {
         "S": S,
     }
+
+    return V, grid
+
+@njit
+def tridiag_solve_inplace_2(l, d_inverse, u, x):
+    n = d_inverse.size
+
+    # Forward substitution
+    for i in range(1, n):
+        x[i] -= l[i - 1] * x[i - 1]
+
+    # Back substitution
+    x[n - 1] *= d_inverse[n - 1]
+
+    for i in range(n - 2, -1, -1):
+        x[i] = (x[i] - u[i] * x[i + 1]) * d_inverse[i]
+
+@njit
+def _cn_loop_2(
+    V,
+    work,
+    l,
+    d_inverse,
+    u,
+    bc_up,
+    bc_up_euler_implicit,
+    n_t,
+    n_rannacher,
+):
+    '''for a comparison between the cn loop that only JIT compiles tridiagonal solves'''
+
+    # Rannacher smoothing
+    for n in range(n_t-1):
+
+        if n < n_rannacher:
+            # First implicit Euler half-step
+            for i in range(V.size):
+                work[i] = 2.0 * V[i]
+
+            work[-1] -= bc_up_euler_implicit[2 * n]
+
+            tridiag_solve_inplace_2(l, d_inverse, u, work)
+
+            for i in range(V.size):
+                V[i] = work[i]
+
+            # Second implicit Euler half-step
+            for i in range(V.size):
+                work[i] = 2.0 * V[i]
+
+            work[-1] -= bc_up_euler_implicit[2 * n + 1]
+
+            tridiag_solve_inplace_2(l, d_inverse, u, work)
+
+            for i in range(V.size):
+                V[i] = work[i]
+        else:
+
+            # Crank-Nicolson
+            for i in range(V.size):
+                work[i] = 4.0 * V[i]
+
+            work[-1] -= bc_up[n]
+
+            tridiag_solve_inplace_2(l, d_inverse, u, work)
+
+            for i in range(V.size):
+                V[i] = work[i] - V[i]
+
+def pde_crank_nicolson_v7(
+        K,
+        S0,
+        r,
+        T,
+        sigma,
+        s_steps=100,
+        t_steps=100
+):
+    """
+    v7 indicates this method has all the optimisations of v6, but we calculate 1/d outside the tridiagonal solve loop and use multiplication inside
+    """
+
+    x, dx, tau, dt, _ = build_grid(K=K, S0=S0, r=r, T=T, sigma=sigma, s_steps=s_steps, t_steps=t_steps, n_std=5)
+    A, B, C = matrix_coefficients(dx, dt, r, sigma)
+    n_x, n_t = s_steps + 1, t_steps + 1
+
+    S = np.exp(x)
+
+
+
+
+    s_boundary_upper = S[-1] - K * np.exp(-r * tau)
+    bc_up = C * (s_boundary_upper[:-1] + s_boundary_upper[1:])
+
+    do_rannacher_step = True
+    n_rannacher = 1
+    bc_up_euler_implicit=None
+
+    if do_rannacher_step:
+        tau_r = np.linspace(0.0, n_rannacher * dt, 2 * n_rannacher + 1)
+        s_boundary_upper_r = S[-1] - K * np.exp(-r * tau_r)
+        bc_up_euler_implicit = C * s_boundary_upper_r[1:]
+
+
+
+    l, d, u = tridiag_factor(np.full(n_x-3, A), np.full(n_x-2, 2 + B), np.full(n_x-3, C))
+
+    V = np.empty(n_x)
+    np.maximum(S - K, 0.0, out=V)
+    V_interior = V[1:-1]
+    y = np.empty_like(V_interior)
+
+    d_inverse = 1/d
+
+    _cn_loop_2(V_interior, y, l, d_inverse, u, bc_up, bc_up_euler_implicit, n_t, n_rannacher)
+
+    V[0] = 0.0
+    V[-1] = s_boundary_upper[-1]
+
+    grid = {
+        "S": S,
+        }
 
     return V, grid

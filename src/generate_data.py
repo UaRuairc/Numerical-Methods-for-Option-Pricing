@@ -132,7 +132,7 @@ def generate_cn_data(
         save=True,
         filename: str=None,
         save_dir: str="./data",
-        versions: tuple = ('v1', 'v2', 'v3', 'v4', 'v5', 'v6')
+        versions: tuple = ('v1', 'v2', 'v3', 'v4', 'v5', 'v6', 'v7')
 ):
     """
     generate data using FDM and MC methods from ./options.
@@ -159,7 +159,7 @@ def generate_cn_data(
     save_dir = Path(save_dir)
     if save: save_dir.mkdir(parents=True, exist_ok=True)
 
-    known_versions = {'v1', 'v2', 'v3', 'v4', 'v5', 'v6'}
+    known_versions = {'v1', 'v2', 'v3', 'v4', 'v5', 'v6', 'v7'}
     unknown = set(versions) - known_versions
     if unknown:
         raise ValueError(f"Unknown cn methods/versions: {sorted(unknown)}")

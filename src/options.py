@@ -3,7 +3,7 @@ import scipy.stats
 from typing import Literal
 
 from src.fdm import pde_crank_nicolson, pde_crank_nicolson_v2, pde_crank_nicolson_v3, pde_crank_nicolson_v4, \
-    pde_crank_nicolson_v5, pde_crank_nicolson_v6
+    pde_crank_nicolson_v5, pde_crank_nicolson_v6, pde_crank_nicolson_v7
 from src.monte_carlo import gbm_exact_integration, gbm_exact_integration_reconstruct, gbm_paths_euler, \
     gbm_paths_milstein
 
@@ -78,7 +78,8 @@ class EuropeanOption:
             "v3": pde_crank_nicolson_v3,     # modified v2 to use scipy's LAPACK for tridiagonal solve instead of scipy's splu. Also no longer define R.
             "v4": pde_crank_nicolson_v4,     # modified v3 to update V in-place, and also introduce Rannacher smoothing. Still uses LAPACK.
             "v5": pde_crank_nicolson_v5,     # modified v4 to use custom tridiagonal solve that can be JIT compiled using numba.
-            "v6": pde_crank_nicolson_v6      # modified v5 to JIT compile the whole cn loop, not just tridiagonal solve.
+            "v6": pde_crank_nicolson_v6,     # modified v5 to JIT compile the whole cn loop, not just tridiagonal solve.
+            "v7": pde_crank_nicolson_v7,     # modified v6 to compute d_inverse outside the loop and use  multiplication by d_inverse during back substitution instead
         }
 
         solver = solvers[version]
