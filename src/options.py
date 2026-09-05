@@ -452,11 +452,13 @@ def pde_crank_nicolson_v2(
         # 1D solve
         V_ = LU.solve(rhs)
 
-    grid = {
-        "S": S[1:-1],
-    }
+    V = np.empty(n_x)
+    V[0] = 0.0
+    V[1:-1] = V_
+    V[-1] = s_boundary_upper[-1]
 
-    return V_, grid
+    grid = {"S": S}
+    return V, grid
 
 def pde_crank_nicolson_v3(
         K,
@@ -494,11 +496,16 @@ def pde_crank_nicolson_v3(
         # tridiagonal solve
         V_, _ = dgttrs(dl, d, du, du2, ipiv, rhs, overwrite_b=1)
 
+    V = np.empty(n_x)
+    V[0] = 0.0
+    V[1:-1] = V_
+    V[-1] = s_boundary_upper[-1]
+
     grid = {
-        "S": S[1:-1],
+        "S": S,
     }
 
-    return V_, grid
+    return V, grid
 
 def pde_crank_nicolson_v4(
         K,
@@ -519,8 +526,6 @@ def pde_crank_nicolson_v4(
 
     S = np.exp(x)
 
-
-    maturity_boundary = np.maximum(S - K, 0)
     s_boundary_upper = S[-1] - K * np.exp(-r * tau)
     bc_up = C * (s_boundary_upper[:-1] + s_boundary_upper[1:])
 
@@ -539,11 +544,6 @@ def pde_crank_nicolson_v4(
     if info != 0:
         raise RuntimeError(f"dgttrf failed: info={info}")
 
-
-
-    V_ = maturity_boundary[1:-1].copy()
-    y = np.empty_like(V_)
-
     ######
     # solve L V[n+1] = R V[n]  Eq. (***)
 
@@ -553,19 +553,26 @@ def pde_crank_nicolson_v4(
     # For CN step R = 4I - L and Eq. (***) becomes:
     # V[n+1] = (4 L^-1 - 1) (V[n] + boundary_conditions)
 
+    V = np.empty(n_x)
+    np.maximum(S - K, 0.0, out=V)
+    V_interior = V[1:-1]
+    y = np.empty_like(V_interior)
 
     for n in range(n_t - 1):
 
         if do_rannacher_step and n < n_rannacher:
-            rannacher_step(V_, n, y, dl, d, du, du2, ipiv, bc_up_euler_implicit)
+            rannacher_step(V_interior, n, y, dl, d, du, du2, ipiv, bc_up_euler_implicit)
         else:
-            cn_step(V_, n, y, dl, d, du, du2, ipiv, bc_up)
+            cn_step(V_interior, n, y, dl, d, du, du2, ipiv, bc_up)
+
+    V[0] = 0.0
+    V[-1] = s_boundary_upper[-1]
 
     grid = {
-        "S": S[1:-1],
+        "S": S,
     }
 
-    return V_, grid
+    return V, grid
 
 @njit
 def tridiag_factor(lower, diag, upper):
@@ -706,8 +713,6 @@ def pde_crank_nicolson_v5(
     S = np.exp(x)
 
 
-
-    maturity_boundary = np.maximum(S - K, 0)
     s_boundary_upper = S[-1] - K * np.exp(-r * tau)
     bc_up = C * (s_boundary_upper[:-1] + s_boundary_upper[1:])
 
@@ -725,10 +730,6 @@ def pde_crank_nicolson_v5(
     l, d, u = tridiag_factor(np.full(n_x-3, A), np.full(n_x-2, 2 + B), np.full(n_x-3, C))
 
 
-
-    V_ = maturity_boundary[1:-1].copy()
-    work = np.empty_like(V_)
-
     ######
     # solve L V[n+1] = R V[n]  Eq. (***)
 
@@ -738,14 +739,21 @@ def pde_crank_nicolson_v5(
     # For CN step R = 4I - L and Eq. (***) becomes:
     # V[n+1] = (4 L^-1 - 1) (V[n] + boundary_conditions)
 
+    V = np.empty(n_x)
+    np.maximum(S - K, 0.0, out=V)
+    V_interior = V[1:-1]
+    y = np.empty_like(V_interior)
 
-    cn_loop(V_, work, l, d, u, bc_up, bc_up_euler_implicit, n_t, n_rannacher)
+    cn_loop(V_interior, y, l, d, u, bc_up, bc_up_euler_implicit, n_t, n_rannacher)
+
+    V[0] = 0.0
+    V[-1] = s_boundary_upper[-1]
 
     grid = {
-        "S": S[1:-1],
+        "S": S,
     }
 
-    return V_, grid
+    return V, grid
 
 def pde_crank_nicolson_v6(
         K,
@@ -768,7 +776,7 @@ def pde_crank_nicolson_v6(
 
 
 
-    maturity_boundary = np.maximum(S - K, 0)
+
     s_boundary_upper = S[-1] - K * np.exp(-r * tau)
     bc_up = C * (s_boundary_upper[:-1] + s_boundary_upper[1:])
 
@@ -786,10 +794,6 @@ def pde_crank_nicolson_v6(
     l, d, u = tridiag_factor(np.full(n_x-3, A), np.full(n_x-2, 2 + B), np.full(n_x-3, C))
 
 
-
-    V_ = maturity_boundary[1:-1].copy()
-    work = np.empty_like(V_)
-
     ######
     # solve L V[n+1] = R V[n]  Eq. (***)
 
@@ -799,14 +803,21 @@ def pde_crank_nicolson_v6(
     # For CN step R = 4I - L and Eq. (***) becomes:
     # V[n+1] = (4 L^-1 - 1) (V[n] + boundary_conditions)
 
+    V = np.empty(n_x)
+    np.maximum(S - K, 0.0, out=V)
+    V_interior = V[1:-1]
+    y = np.empty_like(V_interior)
 
-    _cn_loop(V_, work, l, d, u, bc_up, bc_up_euler_implicit, n_t, n_rannacher)
+    _cn_loop(V_interior, y, l, d, u, bc_up, bc_up_euler_implicit, n_t, n_rannacher)
+
+    V[0] = 0.0
+    V[-1] = s_boundary_upper[-1]
 
     grid = {
-        "S": S[1:-1],
+        "S": S,
     }
 
-    return V_, grid
+    return V, grid
 
 class EuropeanOption:
     def __init__(self, K: float, T: float, type: Literal["call", "put"]):
