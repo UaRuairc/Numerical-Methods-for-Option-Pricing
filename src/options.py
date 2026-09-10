@@ -3,7 +3,7 @@ import scipy.stats
 from typing import Literal
 
 from src.fdm import pde_crank_nicolson, pde_crank_nicolson_v2, pde_crank_nicolson_v3, pde_crank_nicolson_v4, \
-    pde_crank_nicolson_v5, pde_crank_nicolson_v6, pde_crank_nicolson_v7
+    pde_crank_nicolson_v5, pde_crank_nicolson_v6, pde_crank_nicolson_v7, pde_crank_nicolson_american
 from src.monte_carlo import gbm_exact_integration, gbm_exact_integration_reconstruct, gbm_paths_euler, \
     gbm_paths_milstein
 
@@ -133,5 +133,26 @@ class EuropeanOption:
         return delta, gamma, theta
 
 
+
+
+class AmericanOption:
+    def __init__(self, K, T, type="call"):
+        self.K = K
+        self.T = T
+        self.type = type
+
+    def price_CN(self, S0, r, sigma, s_steps, t_steps):
+        V, grid = pde_crank_nicolson_american(self.K, S0, r, self.T, sigma, s_steps, t_steps, contract_type=self.type)
+        x = np.log(grid['S'])
+        option_price = np.interp(np.log(S0), x, V)
+        return option_price
+
+"""
+    def _price_CN(self, S0, r, sigma, s_steps, t_steps):
+        x, dx, tau, dt, n_low = build_grid(self.K, S0, r, self.T, sigma, s_steps, t_steps, n_std=5)
+        grid = (x, dx, tau, dt)
+        V = pde_crank_nicolson_american(self.K, r, sigma, grid)
+        option_price = np.interp(np.log(S0), x, V)
+"""
 if __name__ == "__main__":
     print("hi")

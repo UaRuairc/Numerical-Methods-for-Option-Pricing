@@ -854,3 +854,142 @@ def pde_crank_nicolson_v7(
         }
 
     return V, grid
+
+@njit
+def _american_cn_loop(
+    V,
+    work,
+    l,
+    d_inverse,
+    u,
+    bc,
+    bc_euler_implicit,
+    n_t,
+    n_rannacher,
+    payoff,
+    boundary_idx,
+):
+    """
+    replicates _cn_loop_2, but for american options
+    """
+
+    # Rannacher smoothing
+    for n in range(n_t-1):
+        if n < n_rannacher:
+            # First implicit Euler half-step
+            for i in range(V.size):
+                work[i] = 2.0 * V[i]
+
+            work[boundary_idx] -= bc_euler_implicit[2 * n]
+
+            tridiag_solve_inplace_2(l, d_inverse, u, work)
+
+            for i in range(V.size):
+                V[i] = max(work[i], payoff[i])
+
+            # Second implicit Euler half-step
+            for i in range(V.size):
+                work[i] = 2.0 * V[i]
+
+            work[boundary_idx] -= bc_euler_implicit[2 * n + 1]
+
+            tridiag_solve_inplace_2(l, d_inverse, u, work)
+
+            for i in range(V.size):
+                V[i] = max(work[i], payoff[i])
+        else:
+
+            # Crank-Nicolson
+            for i in range(V.size):
+                work[i] = 4.0 * V[i]
+
+            work[boundary_idx] -= bc[n]
+
+            tridiag_solve_inplace_2(l, d_inverse, u, work)
+
+            for i in range(V.size):
+                V[i] = max(work[i] - V[i], payoff[i])
+
+def pde_crank_nicolson_american(
+        K,
+        S0,
+        r,
+        T,
+        sigma,
+        s_steps,
+        t_steps,
+        contract_type="call",
+        n_rannacher = 1,
+):
+
+    """
+    crank nicolson method for american options without dividends.
+    modified version of pde_crank_nicolson_v7
+    """
+
+    x, dx, tau, dt, _ = build_grid(K, S0, r, T, sigma, s_steps, t_steps, n_std=5)
+    A, B, C = matrix_coefficients(dx, dt, r, sigma)
+    n_x, n_t = x.size, tau.size
+    S = np.exp(x)
+    l, d, u = tridiag_factor(np.full(n_x - 3, A), np.full(n_x - 2, 2 + B), np.full(n_x - 3, C))
+
+
+    # for a put
+    # maturity condition is V = K - S
+    # deep ITM condition is also V = K - S, assuming we are actually deep ITM such that early exercise is optimal
+    # for a put, we care about S[0] not S[-1], so we will define boundary_idx is at x[0], x[-1] for puts and calls respectively
+
+    bc_euler_implicit = np.empty(0)
+
+    if contract_type == "call":
+        exercise_value = S - K
+        boundary_idx = -1
+        deep_otm_call_boundary = 0
+        deep_itm_call_boundary = S[boundary_idx] - K * np.exp(-r * tau)
+
+        bc = C * (deep_itm_call_boundary[:-1] + deep_itm_call_boundary[1:])
+
+        if n_rannacher>=1:
+            tau_r = np.linspace(0.0, n_rannacher * dt, 2 * n_rannacher + 1)
+            deep_otm_call_boundary_r = 0
+            deep_itm_call_boundary_r = S[boundary_idx] - K * np.exp(-r * tau_r)
+            bc_euler_implicit = C * deep_itm_call_boundary_r[1:]
+
+    elif contract_type == "put":
+        exercise_value = K - S
+        boundary_idx = 0
+        deep_otm_put_boundary = 0
+        deep_itm_put_boundary = exercise_value[boundary_idx] # strictly speaking the boundary is a vector of this constant value
+
+        bc = np.full(n_t - 1, 2 * A * deep_itm_put_boundary)
+
+        if n_rannacher>=1:
+            deep_otm_put_boundary_r = 0
+            deep_itm_put_boundary_r = exercise_value[boundary_idx]
+            bc_euler_implicit = np.full(2 * n_rannacher, A * deep_itm_put_boundary_r)
+    else:
+        raise RuntimeError("contract type must be call or put")
+
+
+    V = np.empty(n_x)
+    np.maximum(exercise_value, 0.0, out=V)
+    V_interior = V[1:-1]
+    y = np.empty_like(V_interior)
+    d_inverse = 1 / d
+
+
+    #print(f"bc: {bc}")
+    #print(f"bc euler_implicit: {bc_euler_implicit}")
+    #print(f"payoff: {exercise_value}")
+    _american_cn_loop(V_interior, y, l, d_inverse, u, bc, bc_euler_implicit, n_t, n_rannacher, exercise_value[1:-1], boundary_idx)
+
+
+    if contract_type == "put":
+        V[boundary_idx] = deep_itm_put_boundary
+    else: # call
+        V[boundary_idx] = deep_itm_call_boundary[-1]
+
+    grid = {
+        'S': S
+    }
+    return V, grid
