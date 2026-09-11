@@ -1,6 +1,6 @@
 import pandas as pd
 import gc
-from src.options import EuropeanOption
+from src.options import EuropeanOption, AmericanOption
 import random as pyrandom
 from functools import partial
 from src.utils import timed
@@ -42,7 +42,7 @@ def _execute_runs(runs, K, T):
         gc.enable()
     return dataframe_rows
 
-def generate_mc_data(
+def generate_mc_european_data(
         K: float,
         S0: float,
         r: float,
@@ -55,7 +55,7 @@ def generate_mc_data(
         save: bool=True,
         filename: str=None,
         save_dir: str="./data",
-        methods: tuple=('MC_paths_euler', 'MC_paths_milstein', 'MC_exact_integration')
+        methods: tuple=('gbm_paths_euler', 'gbm_paths_milstein', 'gbm_exact_integration')
 ):
     """price european call options using MC methods from ./options.
 
@@ -76,18 +76,13 @@ def generate_mc_data(
             methods: which mc methods to generate runs for
 
         Returns:
-            pandas dataframe.
+            pandas dataframe, a row for each executed run with columns specifying results and run paramaters.
     """
     save_dir = Path(save_dir)
     if save: save_dir.mkdir(parents=True, exist_ok=True)
 
-    call = EuropeanOption(K, T, type="call")
-    known_fns = {
-        'MC_paths_euler': (call.price_MC_paths_euler, True),
-        'MC_paths_milstein': (call.price_MC_paths_milstein, True),
-        'MC_exact_integration': (call.price_MC_exact_integration, False),
-    }
-    known_methods = known_fns.keys()
+    call = EuropeanOption(K, T, contract_type="call")
+    known_methods = {'gbm_paths_euler', 'gbm_paths_milstein', 'gbm_exact_integration'}
     unknown = set(methods) - known_methods
     if unknown:
         raise ValueError(f"Unknown mc method(s): {sorted(unknown)}")
@@ -96,7 +91,7 @@ def generate_mc_data(
 
     # generate all the runs first then shuffle
     runs=[]
-
+    """
     for m in methods:
         fn, has_steps = known_fns[m]
         for seed in mc_seeds:
@@ -107,7 +102,22 @@ def generate_mc_data(
                             runs.append((m, partial(fn, S0=S0, r=r, sigma=sigma, n_paths=n, steps=s, seed=seed)))
                     else:
                         runs.append((m, partial(fn, S0=S0, r=r, sigma=sigma, n_paths=n, seed=seed)))
+    """
+    has_steps = {
+        'gbm_paths_euler': True,
+        'gbm_paths_milstein': True,
+        'gbm_exact_integration': False
+    }
 
+    for m in methods:
+        for seed in mc_seeds:
+            for rep in range(n_reps):
+                for n in n_paths:
+                    if has_steps[m]:
+                        for s in steps:
+                            runs.append((m, partial(call.price_MC, S0=S0, r=r, sigma=sigma, solver=m, steps=s, n=n, seed=seed)))
+                    else:
+                        runs.append((m, partial(call.price_MC, S0=S0, r=r, sigma=sigma, solver=m, n=n, seed=seed)))
     pyrandom.shuffle(runs)
 
     # execute runs
@@ -119,8 +129,7 @@ def generate_mc_data(
 
     return raw
 
-
-def generate_cn_data(
+def generate_cn_european_data(
         K: float,
         S0: float,
         r: float,
@@ -165,7 +174,7 @@ def generate_cn_data(
         raise ValueError(f"Unknown cn methods/versions: {sorted(unknown)}")
 
     print(f"versions chosen: {versions}")
-    call = EuropeanOption(K, T, type="call")
+    call = EuropeanOption(K, T, contract_type="call")
     runs = []
 
     # generate all the runs first then shuffle
@@ -186,5 +195,61 @@ def generate_cn_data(
 
     return raw
 
+def generate_cn_american_data(
+        K: float,
+        S0: float,
+        r: float,
+        T: float,
+        sigma: float,
+        n_reps: int=1,
+        s_steps: tuple=tuple(range(1000,5000,1000)),
+        t_steps: tuple=tuple(range(1000,5000,1000)),
+        save=True,
+        filename: str=None,
+        save_dir: str="./data",
+):
+    """
+    generate data for american calls and puts using FDM and MC methods from ./options.
 
+        Args:
+            K: Strike
+            S0: Initial spot value
+            r: risk free rate
+            T: time until maturity
+            sigma: vol of gbm process
+            n_reps: number of repeated runs (same seed) for analysing hardware effects on time taken
+            s_steps: tuple containing number of steps for S grid for cn methods
+            t_steps: number of steps for t grid for FDM (cn only atm) methods
+            save: save df
+            filename: overwrite the default filename scheme
+            save_dir: overwrite the default save directory
+
+        Returns:
+            pandas dataframe
+
+        """
+
+    american_call = AmericanOption(K, T, contract_type="call")
+    american_put = AmericanOption(K, T, contract_type="put")
+
+    runs = []
+    # generate all the runs first then shuffle
+    for rep in range(n_reps):
+        for s in s_steps:
+            for t in t_steps:
+                for option in [american_put, american_call]:
+                    cn = ('CN', partial(option.price_CN, S0=S0, r=r, sigma=sigma, s_steps=s, t_steps=t))
+                    runs.append(cn)
+
+
+    pyrandom.shuffle(runs)
+
+    # execute runs
+    dataframe_rows = _execute_runs(runs, K, T)
+
+    #save
+    raw = pd.DataFrame(dataframe_rows)
+    if save: _save_parquet(raw, save_dir, filename, 'cn_results')
+
+    return raw
 

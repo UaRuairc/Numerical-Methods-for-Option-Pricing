@@ -2,10 +2,8 @@ import numpy as np
 import scipy.stats
 from typing import Literal
 
-from src.fdm import pde_crank_nicolson, pde_crank_nicolson_v2, pde_crank_nicolson_v3, pde_crank_nicolson_v4, \
-    pde_crank_nicolson_v5, pde_crank_nicolson_v6, pde_crank_nicolson_v7, pde_crank_nicolson_american
-from src.monte_carlo import gbm_exact_integration, gbm_exact_integration_reconstruct, gbm_paths_euler, \
-    gbm_paths_milstein
+from src.fdm import get_fdm_solver
+from src.monte_carlo import get_mc_solver
 
 
 def BS_closed_form(S0, K, r, T, sigma):
@@ -22,14 +20,15 @@ def BS_closed_form(S0, K, r, T, sigma):
 
 
 class EuropeanOption:
-    def __init__(self, K: float, T: float, type: Literal["call", "put"]):
+    def __init__(self, K: float, T: float, contract_type: Literal["call", "put"]):
         self.K = K
         self.T = T
-        self.style = "European"
-        self.type = type
+        self.contract_type = contract_type
 
     def payoff(self, S):
-        return np.maximum(S - self.K, 0)
+        if self.contract_type == "call":
+            return np.maximum(S - self.K, 0)
+        return np.maximum(self.K - S, 0)
 
     def discount(self, x, r):
         return x * np.exp(- r * self.T)
@@ -37,64 +36,66 @@ class EuropeanOption:
     def put_call_parity(self, call, S0, r):
         return call - S0 + self.discount(self.K, r)
 
-    def price(self, call, S0, r):
-        return call if self.type == "call" else self.put_call_parity(call, S0, r)
-
     def price_closed_form(self, S0, r, sigma):
-        return self.price(BS_closed_form(S0, self.K, r, self.T, sigma), S0, r)
+        call_price = BS_closed_form(S0, self.K, r, self.T, sigma)
+        if self.contract_type != "call":
+            return self.put_call_parity(call_price, S0, r)
+        return call_price
 
-    def price_MC_exact_integration(self, S0, r, sigma, n_paths=10000, seed=1):
-        S = gbm_exact_integration(S0, r, self.T, sigma=sigma, n=n_paths, seed=seed)
-        payoffs = self.payoff(S)
-        call = self.discount(payoffs.mean(), r)
-        return self.price(call, S0, r)
+    def price_MC(self, S0, r, sigma, solver, **kwargs):
 
-    def price_MC_exact_integration_reconstruct(self, S0, r, sigma, n_paths=10000, steps=100, seed=1):
-        """ to test strong order """
-        S = gbm_exact_integration_reconstruct(S0, r, self.T, sigma=sigma, n=n_paths, steps=steps, seed=seed)
-        payoffs = self.payoff(S)
-        call = self.discount(payoffs.mean(), r)
-        return self.price(call, S0, r)
+        """
+        SOLVERS = {
+            'gbm_exact_integration': gbm_exact_integration,
+            'gbm_exact_integration_reconstruct': gbm_exact_integration_reconstruct,
+            'gbm_paths_euler': gbm_paths_euler,
+            'gbm_paths_milstein': gbm_paths_milstein
+        }
+        """
 
-    def price_MC_paths_euler(self, S0, r, sigma, n_paths=10000, steps=100, seed=1):
-        paths = gbm_paths_euler(S0, r, self.T, sigma, n=n_paths, steps=steps, seed=seed)
-        S = paths[:, -1]
-        payoffs = self.payoff(S)
-        call = self.discount(payoffs.mean(), r)
-        return self.price(call, S0, r)
+        solver = get_mc_solver(solver)
+        result = solver(S0=S0, r=r, T=self.T, sigma=sigma, **kwargs)
 
-    def price_MC_paths_milstein(self, S0, r, sigma, n_paths=10000, steps=100, seed=1):
-        paths = gbm_paths_milstein(S0, r, self.T, sigma, n=n_paths, steps=steps, seed=seed)
-        S = paths[:, -1]
+        # gbm_paths_euler and gbm_paths_milstein methods return all timesteps for a given path, S = result[path, t].
+        S = result if result.ndim == 1 else result[:, -1]
         payoffs = self.payoff(S)
-        call = self.discount(payoffs.mean(), r)
-        return self.price(call, S0, r)
+        price = self.discount(payoffs.mean(), r)
+
+        return price
 
     def price_CN(self, S0, r, sigma, s_steps=100, t_steps=500, version : str="v1", return_greeks=False):
 
-        solvers = {
-            "v1": pde_crank_nicolson,        # initial version made: unoptimised & stores V for all t_steps. Uses scipy's splu(L) for LU factorisation
-            "v2": pde_crank_nicolson_v2,     # modified v1 to only store the most recent t_step. Still uses splu(L).
-            "v3": pde_crank_nicolson_v3,     # modified v2 to use scipy's LAPACK for tridiagonal solve instead of scipy's splu. Also no longer define R.
-            "v4": pde_crank_nicolson_v4,     # modified v3 to update V in-place, and also introduce Rannacher smoothing. Still uses LAPACK.
-            "v5": pde_crank_nicolson_v5,     # modified v4 to use custom tridiagonal solve that can be JIT compiled using numba.
-            "v6": pde_crank_nicolson_v6,     # modified v5 to JIT compile the whole cn loop, not just tridiagonal solve.
-            "v7": pde_crank_nicolson_v7,     # modified v6 to compute d_inverse outside the loop and use  multiplication by d_inverse during back substitution instead
-        }
+        """
+            FDM_SOLVERS["pde_crank_nicolson"]["european"] = {
+                "v1": pde_crank_nicolson,        # initial version made: unoptimised & stores V for all t_steps. Uses scipy's splu(L) for LU factorisation
+                "v2": pde_crank_nicolson_v2,     # modified v1 to only store the most recent t_step. Still uses splu(L).
+                "v3": pde_crank_nicolson_v3,     # modified v2 to use scipy's LAPACK for tridiagonal solve instead of scipy's splu. Also no longer define R.
+                "v4": pde_crank_nicolson_v4,     # modified v3 to update V in-place, and also introduce Rannacher smoothing. Still uses LAPACK.
+                "v5": pde_crank_nicolson_v5,     # modified v4 to use custom tridiagonal solve that can be JIT compiled using numba.
+                "v6": pde_crank_nicolson_v6,     # modified v5 to JIT compile the whole cn loop, not just tridiagonal solve.
+                "v7": pde_crank_nicolson_v7,     # modified v6 to compute d_inverse outside the loop and use  multiplication by d_inverse during back substitution instead
+            }
+        """
 
-        solver = solvers[version]
+        solver = get_fdm_solver(method="pde_crank_nicolson", style="european", version=version)
 
         V, grid = solver(self.K, S0, r, self.T, sigma, s_steps=s_steps, t_steps=t_steps)
 
         x = np.log(grid['S'])
 
-        call = np.interp(np.log(S0), x, V)
+        call_price = np.interp(np.log(S0), x, V)
+
+        if self.contract_type != "call":
+            price = self.put_call_parity(call_price, S0, r)
+        else:
+            price = call_price
+
 
         if return_greeks:
             delta, gamma, theta = self._greeks_CN(V, x, sigma, r)
-            return self.price(call, S0, r), delta, gamma, theta, x
+            return price, delta, gamma, theta, x
 
-        return self.price(call, S0, r)
+        return price
 
     def _greeks_CN(self, V, x, sigma, r):
         """
@@ -116,7 +117,7 @@ class EuropeanOption:
         # theta = - dv/dtau
         theta = -0.5 * sigma ** 2 * Vxx - (r - 0.5 * sigma ** 2) * Vx + r * V[1:-1]
 
-        if self.type == 'put':
+        if self.contract_type == 'put':
             # use put call parity:
 
             # P = C - S + e^(-r*(T-t)) * K
@@ -136,13 +137,20 @@ class EuropeanOption:
 
 
 class AmericanOption:
-    def __init__(self, K, T, type="call"):
+    def __init__(self, K, T, contract_type="call"):
         self.K = K
         self.T = T
-        self.type = type
+        self.contract_type = contract_type
 
-    def price_CN(self, S0, r, sigma, s_steps, t_steps):
-        V, grid = pde_crank_nicolson_american(self.K, S0, r, self.T, sigma, s_steps, t_steps, contract_type=self.type)
+    def price_CN(self, S0, r, sigma, s_steps, t_steps, version = "v1"):
+        """
+            FDM_SOLVERS["american"] = {
+                "v1": pde_american_crank_nicolson,        # initial version made: similar level of optimsation as pde_crank_nicolson_v7
+            }
+        """
+        solver = get_fdm_solver(method="pde_crank_nicolson", style="american", version=version)
+
+        V, grid = solver(self.K, S0, r, self.T, sigma, s_steps, t_steps, contract_type=self.contract_type)
         x = np.log(grid['S'])
         option_price = np.interp(np.log(S0), x, V)
         return option_price
