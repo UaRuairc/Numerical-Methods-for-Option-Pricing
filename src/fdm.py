@@ -484,8 +484,7 @@ def pde_crank_nicolson_v4(
 
     return V, grid
 
-
-@njit
+@njit(cache=True, fastmath=True)
 def tridiag_factor(lower, diag, upper):
     l = lower.copy()
     d = diag.copy()
@@ -498,8 +497,7 @@ def tridiag_factor(lower, diag, upper):
 
     return l, d, u
 
-
-@njit
+@njit(cache=True, fastmath=True)
 def tridiag_solve_inplace(l, d, u, x):
     n = d.size
 
@@ -553,8 +551,7 @@ def cn_loop(
 
             np.subtract(work, V, out=V)
 
-
-@njit
+@njit(cache=True, fastmath=True)
 def _cn_loop(
     V,
     work,
@@ -733,7 +730,7 @@ def pde_crank_nicolson_v6(
 
     return V, grid
 
-@njit
+@njit(cache=True)
 def tridiag_solve_inplace_2(l, d_inverse, u, x):
     n = d_inverse.size
 
@@ -747,7 +744,7 @@ def tridiag_solve_inplace_2(l, d_inverse, u, x):
     for i in range(n - 2, -1, -1):
         x[i] = (x[i] - u[i] * x[i + 1]) * d_inverse[i]
 
-@njit
+@njit(cache=True, fastmath=True)
 def _cn_loop_2(
     V,
     work,
@@ -855,7 +852,7 @@ def pde_crank_nicolson_v7(
 
     return V, grid
 
-@njit
+@njit(cache=True, fastmath=True)
 def _american_cn_loop(
     V,
     work,
