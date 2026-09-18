@@ -1009,4 +1009,4 @@ FDM_SOLVERS = {
 }
 
 def get_fdm_solver(method, style, version):
-    return FDM_SOLVERS[method][style][version]
+    return FDM_SOLVERS.get(method, {}).get(style, {}).get(version, None)

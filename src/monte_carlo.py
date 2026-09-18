@@ -88,15 +88,21 @@ def strong_error(fn, S0, r, T, sigma, n, steps, seed):
     S_exact = gbm_exact_integration_reconstruct(S0, r, T, sigma, n=n, steps=steps, seed=seed)
     return np.abs(S_T - S_exact).mean()
 
-MC_SOLVERS = {
-    'gbm_exact_integration': gbm_exact_integration,
-    'gbm_exact_integration_reconstruct': gbm_exact_integration_reconstruct,
-    'gbm_paths_euler': gbm_paths_euler,
-    'gbm_paths_milstein': gbm_paths_milstein
+MC_GENERATORS = {
+    'gbm_exact_integration': {"v1": gbm_exact_integration},
+    'gbm_exact_integration_reconstruct': {"v1": gbm_exact_integration_reconstruct},
+    'gbm_paths_euler': {"v1": gbm_paths_euler},
+    'gbm_paths_milstein': {"v1": gbm_paths_milstein}
 }
 
-def get_mc_solver(method):
-    if method not in MC_SOLVERS.keys():
-        raise RuntimeError(f"Method {method} not a supported MC method. Methods include: {list(MC_SOLVERS.keys())}")
-
-    return MC_SOLVERS[method]
+def get_mc_generator(generator, version):
+    try:
+        versions = MC_GENERATORS[generator]
+    except KeyError:
+        raise ValueError(f"unknown generator {generator!r}; "
+                         f"available: {sorted(MC_GENERATORS)}") from None
+    try:
+        return versions[version]
+    except KeyError:
+        raise ValueError(f"unknown version {version!r} for {generator!r}; "
+                         f"available: {sorted(versions)}") from None

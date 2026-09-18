@@ -3,8 +3,10 @@ import scipy.stats
 from typing import Literal
 
 from src.fdm import get_fdm_solver
-from src.monte_carlo import get_mc_solver
+from src.monte_carlo import get_mc_generator
 
+def get_solver(scheme):
+    return {'MC': get_mc_generator, 'CN': get_fdm_solver}[scheme]
 
 def BS_closed_form(S0, K, r, T, sigma):
     """
@@ -42,28 +44,22 @@ class EuropeanOption:
             return self.put_call_parity(call_price, S0, r)
         return call_price
 
-    def price_MC(self, S0, r, sigma, solver, **kwargs):
+    def price(self, scheme, **kwargs):
 
-        """
-        SOLVERS = {
-            'gbm_exact_integration': gbm_exact_integration,
-            'gbm_exact_integration_reconstruct': gbm_exact_integration_reconstruct,
-            'gbm_paths_euler': gbm_paths_euler,
-            'gbm_paths_milstein': gbm_paths_milstein
-        }
-        """
+        if scheme == "MC":
+            return self.price_MC(**kwargs)
+        elif scheme == "CN":
+            return self.price_CN(**kwargs)
+        else:
+            raise NotImplementedError(f"{scheme} not implemented")
 
-        solver = get_mc_solver(solver)
-        result = solver(S0=S0, r=r, T=self.T, sigma=sigma, **kwargs)
-
-        # gbm_paths_euler and gbm_paths_milstein methods return all timesteps for a given path, S = result[path, t].
+    def price_MC(self, S0, r, sigma, generator, version="v1", **kwargs):
+        gen = get_mc_generator(generator, version)
+        result = gen(S0=S0, r=r, T=self.T, sigma=sigma, **kwargs)
         S = result if result.ndim == 1 else result[:, -1]
-        payoffs = self.payoff(S)
-        price = self.discount(payoffs.mean(), r)
+        return self.discount(self.payoff(S).mean(), r)
 
-        return price
-
-    def price_CN(self, S0, r, sigma, s_steps=100, t_steps=500, version : str="v1", return_greeks=False):
+    def price_CN(self, S0, r, sigma, s_steps=100, t_steps=500, version : str="v7", return_greeks=False):
 
         """
             FDM_SOLVERS["pde_crank_nicolson"]["european"] = {
