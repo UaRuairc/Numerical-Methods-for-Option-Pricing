@@ -1,0 +1,13 @@
+matplotlib==3.10.7
+numba==0.67.0
+numpy==2.3.3
+pandas==3.0.5
+plotly==6.9.0
+scipy==1.16.2
+seaborn==0.13.2
+tqdm==4.67.1
+
+ipykernel
+ipywidgets
+kaleido
+pyarrow
